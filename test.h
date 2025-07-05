@@ -102,7 +102,7 @@ inline size_t get_current_rss() {
     size_t current = get_current_rss();                                        \
     if (current > _mem_peak_##name)                                            \
       _mem_peak_##name = current;                                              \
-    std::cout << "[" << #name << "] 内存使用: "                            \
+    std::cout << "[" << #name << "] 内存使用: "                                \
               << (_mem_peak_##name - _mem_start_##name) / 1024                 \
               << " KB (峰值)\n";                                               \
   } while (0)
@@ -194,17 +194,10 @@ operator<<(std::ostream &os, const Container &c) {
 // ======================
 
 // 带颜色的输出
-#define PRINT_INFO(msg)                                                        \
-  std::cout << "\033[1;34m[信息]\033[0m " << msg << std::endl
-
-#define PRINT_WARNING(msg)                                                     \
-  std::cout << "\033[1;33m[警告]\033[0m " << msg << std::endl
-
-#define PRINT_ERROR(msg)                                                       \
-  std::cerr << "\033[1;31m[错误]\033[0m " << msg << std::endl
-
-#define PRINT_SUCCESS(msg)                                                     \
-  std::cout << "\033[1;32m[成功]\033[0m " << msg << std::endl
+#define PRINT_INFO std::cout << "\033[1;34m[INFO]\033[0m "
+#define PRINT_WARNING std::cout << "\033[1;33m[WARN]\033[0m "
+#define PRINT_ERROR std::cerr << "\033[1;31m[ERROR]\033[0m "
+#define PRINT_SUCCESS std::cout << "\033[1;32m[SUCCESS]\033[0m "
 
 // 二进制文件读写
 inline bool write_binary_file(const std::string &filename, const void *data,

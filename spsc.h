@@ -7,23 +7,25 @@
 #include <type_traits>
 
 template <class T>
-concept Queue = requires(T q, typename T::value_type v,
-                         typename T::value_type &out_v,
-                         const typename T::value_type *data) {
-  // 检查 push 是否能同时接受左值和右值
-  { q.push(v) } -> std::convertible_to<bool>;
-  { q.push(std::move(v)) } -> std::convertible_to<bool>;
+concept Queue =
+    requires(T q, typename T::value_type v, typename T::value_type &out_v,
+             typename T::value_type *data) {
+      // 检查 push 是否能同时接受左值和右值
+      { q.push(v) } -> std::convertible_to<bool>;
+      { q.push(std::move(v)) } -> std::convertible_to<bool>;
 
-  // 检查 pop 是否能接受一个左值引用作为输出参数
-  { q.pop(out_v) } -> std::convertible_to<bool>;
+      // 检查 pop 是否能接受一个左值引用作为输出参数
+      { q.pop(out_v) } -> std::convertible_to<bool>;
 
-  // 检查 size 和 empty
-  { q.size() } -> std::convertible_to<size_t>;
-  { q.empty() } -> std::convertible_to<bool>;
+      // 检查 size 和 empty
+      { q.size() } -> std::convertible_to<size_t>;
+      { q.empty() } -> std::convertible_to<bool>;
 
-  // 检查 push_bulk
-  { q.push_bulk(data, 0) } -> std::convertible_to<size_t>;
-};
+      // 检查 push_bulk
+      { q.push_bulk(data, 0) } -> std::convertible_to<size_t>;
+      // 检查 pop_bulk
+      { q.pop_bulk(data, 0) } -> std::convertible_to<size_t>;
+    };
 
 static constexpr size_t CacheLineSize = 64;
 
@@ -121,34 +123,27 @@ public:
   size_t push_bulk(const T *data, size_t count) noexcept {
     const size_t head = prod_.head.load(std::memory_order_relaxed);
     size_t tail;
-
     // 检查可用空间
     if constexpr (EnableCache) {
       tail = prod_.cached_tail;
     } else {
       tail = cons_.tail.load(std::memory_order_acquire);
     }
-
-    size_t available =
-        (tail > head) ? (tail - head - 1) : (Capacity - head + tail - 1);
-
+    size_t available = available_space(head, tail);
     if constexpr (EnableCache) {
       if (available < count) [[unlikely]] {
         tail = cons_.tail.load(std::memory_order_acquire);
         prod_.cached_tail = tail;
-        available =
-            (tail > head) ? (tail - head - 1) : (Capacity - head + tail - 1);
+        available = available_space(head, tail);
       }
     }
-
     const size_t to_write = std::min(count, available);
-    if (to_write == 0) {
+    if (to_write == 0) [[unlikely]] {
       return 0;
     }
-
     // 检查是否跨越了环形缓冲区的边界
     const size_t end_of_buffer = Capacity - head;
-    if (to_write <= end_of_buffer) {
+    if (to_write <= end_of_buffer) [[likely]] {
       std::memcpy(&buffer_[head], data, to_write * sizeof(T));
     } else {
       const size_t part1 = end_of_buffer;
@@ -161,6 +156,42 @@ public:
     prod_.head.store(nextIndex(head, to_write), std::memory_order_release);
 
     return to_write;
+  }
+
+  size_t pop_bulk(T *data, size_t count) noexcept {
+    const size_t tail = cons_.tail.load(std::memory_order_relaxed);
+    size_t head;
+    // 检查可用数据
+    if constexpr (EnableCache) {
+      head = cons_.cached_head;
+    } else {
+      head = prod_.head.load(std::memory_order_acquire);
+    }
+    size_t available = available_space(tail, head + 1);
+    if constexpr (EnableCache) {
+      if (available < count) [[unlikely]] {
+        head = prod_.head.load(std::memory_order_acquire);
+        cons_.cached_head = head;
+        available = available_space(tail, head + 1);
+      }
+    }
+    const size_t to_read = std::min(count, available);
+    if (to_read == 0) [[unlikely]] {
+      return 0;
+    }
+    // 检查是否跨越了环形缓冲区的边界
+    const size_t end_of_buffer = Capacity - tail;
+    if (to_read <= end_of_buffer) [[likely]] {
+      std::memcpy(data, &buffer_[tail], to_read * sizeof(T));
+    } else {
+      const size_t part1 = end_of_buffer;
+      std::memcpy(data, &buffer_[tail], part1 * sizeof(T));
+      const size_t part2 = to_read - part1;
+      std::memcpy(data + part1, &buffer_[0], part2 * sizeof(T));
+    }
+    // 更新 tail 指针并发布
+    cons_.tail.store(nextIndex(tail, to_read), std::memory_order_release);
+    return to_read;
   }
 
   bool empty() const noexcept {
@@ -179,15 +210,18 @@ public:
   }
 
 private:
-  size_t nextIndex(size_t idx) const noexcept {
+  inline size_t nextIndex(size_t idx) const noexcept {
     return (idx + 1) & (Capacity - 1);
   }
-  size_t nextIndex(size_t idx, size_t offset) const noexcept {
+  inline size_t nextIndex(size_t idx, size_t offset) const noexcept {
     return (idx + offset) & (Capacity - 1);
   }
-  size_t available_space(size_t head) const noexcept {
+  inline size_t available_space(size_t head) const noexcept {
     const size_t tail = cons_.tail.load(std::memory_order_acquire);
-    return (tail > head) ? (tail - head - 1) : (Capacity - head + tail - 1);
+    return (Capacity + tail - head - 1) & (Capacity - 1);
+  }
+  inline size_t available_space(size_t head, size_t tail) const noexcept {
+    return (Capacity + tail - head - 1) & (Capacity - 1);
   }
 };
 // 原始线程安全队列
@@ -237,5 +271,14 @@ public:
       ++pushed;
     }
     return pushed;
+  }
+  size_t pop_bulk(T *data, size_t count) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    size_t popped = 0;
+    while (popped < count && !queue_.empty()) {
+      data[popped++] = queue_.front();
+      queue_.pop();
+    }
+    return popped;
   }
 };
