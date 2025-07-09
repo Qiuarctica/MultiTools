@@ -14,7 +14,6 @@
 
 // Macro to enable/disable assertions at compile time
 #ifndef STEST_ENABLE_ASSERT
-#define STEST_ENABLE_ASSERT 1
 #endif
 
 namespace stest {

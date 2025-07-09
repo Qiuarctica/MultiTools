@@ -1,33 +1,8 @@
+#pragma once
+#include "defs.h"
 #include <array>
 #include <atomic>
-#include <cstddef>
 #include <cstring>
-#include <mutex>
-#include <queue>
-#include <type_traits>
-
-template <class T>
-concept Queue =
-    requires(T q, typename T::value_type v, typename T::value_type &out_v,
-             typename T::value_type *data) {
-      // 检查 push 是否能同时接受左值和右值
-      { q.push(v) } -> std::convertible_to<bool>;
-      { q.push(std::move(v)) } -> std::convertible_to<bool>;
-
-      // 检查 pop 是否能接受一个左值引用作为输出参数
-      { q.pop(out_v) } -> std::convertible_to<bool>;
-
-      // 检查 size 和 empty
-      { q.size() } -> std::convertible_to<size_t>;
-      { q.empty() } -> std::convertible_to<bool>;
-
-      // 检查 push_bulk
-      { q.push_bulk(data, 0) } -> std::convertible_to<size_t>;
-      // 检查 pop_bulk
-      { q.pop_bulk(data, 0) } -> std::convertible_to<size_t>;
-    };
-
-static constexpr size_t CacheLineSize = 64;
 
 template <bool Align> struct ProducerStateImpl;
 // 有缓存行对齐
@@ -76,122 +51,186 @@ public:
   SPSCQueue(const SPSCQueue &) = delete;
   SPSCQueue &operator=(const SPSCQueue &) = delete;
 
-  template <typename U> bool push(U &&value) noexcept {
+  // Writer 语义的 push 操作
+  template <Writer<T> W> bool push_with_writer(W writer) noexcept {
     const size_t head = prod_.head.load(std::memory_order_relaxed);
     const size_t next_head = nextIndex(head);
-    // 快速路径检查
+
     if constexpr (EnableCache) {
       if (next_head == prod_.cached_tail) [[unlikely]] {
-        prod_.cached_tail = cons_.tail.load(std::memory_order_acquire);
+        prod_.cached_tail = cons_.tail.load(std::memory_order_consume);
         if (next_head == prod_.cached_tail) {
-          return false; // 队列已满
+          return false;
         }
       }
     } else {
       if (available_space(head) == 0) [[unlikely]] {
-        return false; // 队列已满
+        return false;
       }
     }
 
-    buffer_[head] = std::forward<U>(value);
-    // 发布操作
+    // 让 writer 直接写入缓冲区位置
+    writer(&buffer_[head]);
     prod_.head.store(next_head, std::memory_order_release);
     return true;
   }
 
-  bool pop(T &value) noexcept {
+  template <typename U>
+  bool push(U &&value) noexcept
+    requires(!Writer<U, T>)
+  {
+    return push_with_writer([value = std::forward<U>(value)](T *buffer) {
+      *buffer = std::move(value);
+    });
+  }
+
+  template <typename U>
+  bool push(U writer) noexcept
+    requires(Writer<U, T>)
+  {
+    return push_with_writer(writer);
+  }
+
+  // Reader 语义的 pop 操作
+  template <Reader<T> R> bool pop(R reader) noexcept {
     const size_t tail = cons_.tail.load(std::memory_order_relaxed);
-    // 快速路径
+
     if constexpr (EnableCache) {
       if (tail == cons_.cached_head) [[unlikely]] {
         cons_.cached_head = prod_.head.load(std::memory_order_acquire);
         if (tail == cons_.cached_head) {
-          return false; // 队列为空
+          return false;
         }
       }
     } else {
       if (tail == prod_.head.load(std::memory_order_acquire)) [[unlikely]] {
-        return false; // 队列为空
+        return false;
       }
     }
-    // 读取数据
-    value = buffer_[tail];
+
+    // 让 reader 直接读取缓冲区位置
+    reader(&buffer_[tail]);
     cons_.tail.store(nextIndex(tail), std::memory_order_release);
     return true;
   }
 
-  size_t push_bulk(const T *data, size_t count) noexcept {
+  bool pop(T &value) noexcept {
+    return pop([&value](const T *buffer) { value = *buffer; });
+  }
+
+  // 批量 Writer 操作
+  template <BulkWriter<T> W>
+  size_t push_bulk(W writer, size_t max_count) noexcept {
     const size_t head = prod_.head.load(std::memory_order_relaxed);
     size_t tail;
-    // 检查可用空间
+
     if constexpr (EnableCache) {
       tail = prod_.cached_tail;
     } else {
       tail = cons_.tail.load(std::memory_order_acquire);
     }
+
     size_t available = available_space(head, tail);
     if constexpr (EnableCache) {
-      if (available < count) [[unlikely]] {
+      if (available < max_count) [[unlikely]] {
         tail = cons_.tail.load(std::memory_order_acquire);
         prod_.cached_tail = tail;
         available = available_space(head, tail);
       }
     }
-    const size_t to_write = std::min(count, available);
-    if (to_write == 0) [[unlikely]] {
+
+    const size_t can_write = std::min(max_count, available);
+    if (can_write == 0) [[unlikely]] {
       return 0;
     }
-    // 检查是否跨越了环形缓冲区的边界
+
     const size_t end_of_buffer = Capacity - head;
-    if (to_write <= end_of_buffer) [[likely]] {
-      std::memcpy(&buffer_[head], data, to_write * sizeof(T));
+
+    if (can_write <= end_of_buffer) [[likely]] {
+      // 预取
+      T *dest = &buffer_[head];
+      for (size_t i = 0; i < can_write; i += CacheLineSize / sizeof(T)) {
+        __builtin_prefetch(dest + i + CacheLineSize / sizeof(T), 1, 0);
+      }
+      // 连续写入
+      writer(&buffer_[head], can_write, 0);
     } else {
+      // 分两段写入
       const size_t part1 = end_of_buffer;
-      std::memcpy(&buffer_[head], data, part1 * sizeof(T));
-      const size_t part2 = to_write - part1;
-      std::memcpy(&buffer_[0], data + part1, part2 * sizeof(T));
+      writer(&buffer_[head], part1, 0);
+      const size_t part2 = can_write - part1;
+      writer(&buffer_[0], part2, part1);
     }
+    prod_.head.store(nextIndex(head, can_write), std::memory_order_release);
 
-    // 更新 head 指针并发布
-    prod_.head.store(nextIndex(head, to_write), std::memory_order_release);
-
-    return to_write;
+    return can_write;
   }
 
-  size_t pop_bulk(T *data, size_t count) noexcept {
+  size_t push_bulk(const T *data, size_t count) noexcept {
+    return push_bulk(
+        [data](T *buffer, size_t n, size_t offset) {
+          std::memcpy(buffer, data + offset, n * sizeof(T));
+          return n;
+        },
+        count);
+  }
+
+  // 批量 Reader 操作
+  template <BulkReader<T> R>
+  size_t pop_bulk(R reader, size_t max_count) noexcept {
     const size_t tail = cons_.tail.load(std::memory_order_relaxed);
     size_t head;
-    // 检查可用数据
+
     if constexpr (EnableCache) {
       head = cons_.cached_head;
     } else {
       head = prod_.head.load(std::memory_order_acquire);
     }
+
     size_t available = available_space(tail, head + 1);
     if constexpr (EnableCache) {
-      if (available < count) [[unlikely]] {
+      if (available < max_count) [[unlikely]] {
         head = prod_.head.load(std::memory_order_acquire);
         cons_.cached_head = head;
         available = available_space(tail, head + 1);
       }
     }
-    const size_t to_read = std::min(count, available);
-    if (to_read == 0) [[unlikely]] {
+
+    const size_t can_read = std::min(max_count, available);
+    if (can_read == 0) [[unlikely]] {
       return 0;
     }
-    // 检查是否跨越了环形缓冲区的边界
+
     const size_t end_of_buffer = Capacity - tail;
-    if (to_read <= end_of_buffer) [[likely]] {
-      std::memcpy(data, &buffer_[tail], to_read * sizeof(T));
+
+    if (can_read <= end_of_buffer) [[likely]] {
+      // 预取
+      const T *src = &buffer_[tail];
+      for (size_t i = 0; i < can_read; i += CacheLineSize / sizeof(T)) {
+        __builtin_prefetch(src + i + CacheLineSize / sizeof(T), 0, 0);
+      }
+      // 连续读取
+      reader(&buffer_[tail], can_read, 0);
     } else {
+      // 分两段读取
       const size_t part1 = end_of_buffer;
-      std::memcpy(data, &buffer_[tail], part1 * sizeof(T));
-      const size_t part2 = to_read - part1;
-      std::memcpy(data + part1, &buffer_[0], part2 * sizeof(T));
+      reader(&buffer_[tail], part1, 0);
+      const size_t part2 = can_read - part1;
+      reader(&buffer_[0], part2, part1);
     }
-    // 更新 tail 指针并发布
-    cons_.tail.store(nextIndex(tail, to_read), std::memory_order_release);
-    return to_read;
+    if (can_read > 0) {
+      cons_.tail.store(nextIndex(tail, can_read), std::memory_order_release);
+    }
+    return can_read;
+  }
+
+  size_t pop_bulk(T *data, size_t count) noexcept {
+    return pop_bulk(
+        [data](const T *buffer, size_t n, size_t offset) {
+          std::memcpy(data + offset, buffer, n * sizeof(T));
+          return n;
+        },
+        count);
   }
 
   bool empty() const noexcept {
@@ -211,74 +250,15 @@ public:
 
 private:
   inline size_t nextIndex(size_t idx) const noexcept {
-    return (idx + 1) & (Capacity - 1);
+    return nextIndex(idx, 1);
   }
   inline size_t nextIndex(size_t idx, size_t offset) const noexcept {
     return (idx + offset) & (Capacity - 1);
   }
   inline size_t available_space(size_t head) const noexcept {
-    const size_t tail = cons_.tail.load(std::memory_order_acquire);
-    return (Capacity + tail - head - 1) & (Capacity - 1);
+    return (available_space(head, cons_.tail.load(std::memory_order_acquire)));
   }
   inline size_t available_space(size_t head, size_t tail) const noexcept {
     return (Capacity + tail - head - 1) & (Capacity - 1);
-  }
-};
-// 原始线程安全队列
-template <typename T> class OriginMultipleSafeQueue {
-  static_assert(std::is_trivially_copyable_v<T>,
-                "T must be trivially copyable");
-
-  std::queue<T> queue_;
-  std::mutex mutex_;
-
-public:
-  using value_type = T;
-
-  OriginMultipleSafeQueue() = default;
-  ~OriginMultipleSafeQueue() = default;
-  OriginMultipleSafeQueue(const OriginMultipleSafeQueue &) = delete;
-  OriginMultipleSafeQueue &operator=(const OriginMultipleSafeQueue &) = delete;
-
-  bool push(const T &value) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    queue_.push(value);
-    return true;
-  }
-
-  bool pop(T &value) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (queue_.empty()) {
-      return false;
-    }
-    value = queue_.front();
-    queue_.pop();
-    return true;
-  }
-  size_t size() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return queue_.size();
-  }
-  bool empty() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return queue_.empty();
-  }
-  size_t push_bulk(const T *data, size_t count) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    size_t pushed = 0;
-    for (size_t i = 0; i < count; ++i) {
-      queue_.push(data[i]);
-      ++pushed;
-    }
-    return pushed;
-  }
-  size_t pop_bulk(T *data, size_t count) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    size_t popped = 0;
-    while (popped < count && !queue_.empty()) {
-      data[popped++] = queue_.front();
-      queue_.pop();
-    }
-    return popped;
   }
 };

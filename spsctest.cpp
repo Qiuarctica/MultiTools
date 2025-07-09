@@ -1,6 +1,5 @@
 #include "spsc.h"
 #include "test_suit.h"
-#include <iostream>
 #include <thread>
 
 using namespace stest;
@@ -33,6 +32,7 @@ void test_single_thread() {
     ASSERT(q.pop(v));
     ASSERT_EQ(v, i);
   }
+
   ASSERT(!q.pop(v));
   ASSERT(q.empty());
   PRINT_INFO("✅ 单线程功能测试通过");
