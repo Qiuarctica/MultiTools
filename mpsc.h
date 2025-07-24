@@ -115,6 +115,8 @@ public:
     }
     return total;
   }
+
+  size_t capacity() const noexcept { return Capacity; }
 };
 
 // thread_local 变量定义
