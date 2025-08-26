@@ -9,7 +9,7 @@
 template <typename T, size_t Capacity, size_t MaxProducers = 4>
 class MPSCQueue {
   static_assert(IS_POWDER_OF_TWO_AND_GREATER_THAN_ZERO(Capacity));
-  using SPSCType = SPSCQueue<T, Capacity, true, true>;
+  using SPSCType = SPSCQueue<T, Capacity>;
 
 private:
   alignas(CacheLineSize) std::array<SPSCType, MaxProducers> queues_;

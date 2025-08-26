@@ -1,17 +1,18 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
-
 // Macro to enable/disable assertions at compile time
 #ifndef STEST_ENABLE_ASSERT
 #endif
@@ -191,5 +192,84 @@ private:
 #define PRINT_WARNING(...) stest::print(stest::LogLevel::Warning, __VA_ARGS__)
 #define PRINT_ERROR(...) stest::print(stest::LogLevel::Error, __VA_ARGS__)
 #define PRINT_FATAL(...) stest::print(stest::LogLevel::Fatal, __VA_ARGS__)
+
+class LatencyTester {
+private:
+  using clock_type = std::chrono::high_resolution_clock;
+  using duration_type = std::chrono::nanoseconds;
+
+  std::vector<double> latencies_;
+  size_t warmup_iterations_;
+  size_t test_iterations_;
+
+public:
+  LatencyTester(size_t warmup = 1000, size_t test = 10000)
+      : warmup_iterations_(warmup), test_iterations_(test) {
+    latencies_.reserve(test_iterations_);
+  }
+
+  struct LatencyStats {
+    double min_ns;
+    double max_ns;
+    double avg_ns;
+    double median_ns;
+    double p95_ns;
+    double p99_ns;
+    double p999_ns;
+    double stddev_ns;
+  };
+
+  template <typename TestFunc>
+  LatencyStats measure_latency(const std::string &test_name,
+                               TestFunc &&test_func) {
+    latencies_.clear();
+
+    // 🔧 预热阶段
+    // PRINT_INFO("Warming up {} (iterations: {})", test_name,
+    // warmup_iterations_); for (size_t i = 0; i < warmup_iterations_; ++i) {
+    //   test_func();
+    // }
+
+    // 🔧 实际测试阶段
+    PRINT_INFO("Measuring {} latency (iterations: {})", test_name,
+               test_iterations_);
+    for (size_t i = 0; i < test_iterations_; ++i) {
+      auto start = clock_type::now();
+      test_func();
+      auto end = clock_type::now();
+
+      auto duration = std::chrono::duration_cast<duration_type>(end - start);
+      latencies_.push_back(static_cast<double>(duration.count()));
+    }
+
+    return calculate_stats();
+  }
+
+private:
+  LatencyStats calculate_stats() {
+    std::sort(latencies_.begin(), latencies_.end());
+
+    LatencyStats stats;
+    stats.min_ns = latencies_.front();
+    stats.max_ns = latencies_.back();
+    stats.avg_ns = std::accumulate(latencies_.begin(), latencies_.end(), 0.0) /
+                   latencies_.size();
+
+    size_t n = latencies_.size();
+    stats.median_ns = latencies_[n / 2];
+    stats.p95_ns = latencies_[static_cast<size_t>(n * 0.95)];
+    stats.p99_ns = latencies_[static_cast<size_t>(n * 0.99)];
+    stats.p999_ns = latencies_[static_cast<size_t>(n * 0.999)];
+
+    // 计算标准差
+    double variance = 0.0;
+    for (double latency : latencies_) {
+      variance += (latency - stats.avg_ns) * (latency - stats.avg_ns);
+    }
+    stats.stddev_ns = std::sqrt(variance / latencies_.size());
+
+    return stats;
+  }
+};
 
 } // namespace stest

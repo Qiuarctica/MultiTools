@@ -63,29 +63,7 @@ void test_bulk() {
   PRINT_INFO("Bulk operations test passed");
 }
 
-void test_cache_align_switch() {
-  PRINT_INFO("Cache/alignment options test");
-  int v;
-
-  // Cache disabled
-  SPSCQueue<int, 8, false, true> q1;
-  ASSERT_MSG(q1.push(1), "Cache-disabled queue push failed");
-  ASSERT_MSG(q1.pop(v) && v == 1, "Cache-disabled queue pop failed");
-
-  // Alignment disabled
-  SPSCQueue<int, 8, true, false> q2;
-  ASSERT_MSG(q2.push(2), "Alignment-disabled queue push failed");
-  ASSERT_MSG(q2.pop(v) && v == 2, "Alignment-disabled queue pop failed");
-
-  // Both disabled
-  SPSCQueue<int, 8, false, false> q3;
-  ASSERT_MSG(q3.push(3), "Both-disabled queue push failed");
-  ASSERT_MSG(q3.pop(v) && v == 3, "Both-disabled queue pop failed");
-
-  PRINT_INFO("Cache/alignment options test passed");
-}
-
-// 🔧 修复：FIFO顺序验证
+// FIFO顺序验证
 void test_fifo_correctness() {
   PRINT_INFO("FIFO order correctness test");
   SPSCQueue<int, 16> q;
@@ -132,7 +110,7 @@ void test_fifo_correctness() {
   PRINT_INFO("FIFO order correctness test passed");
 }
 
-// 🔧 新增：边界条件测试
+// 边界条件测试
 void test_boundary_conditions() {
   PRINT_INFO("Boundary conditions test");
   SPSCQueue<int, 4> q; // Small queue for easier boundary testing
@@ -167,7 +145,7 @@ void test_boundary_conditions() {
   PRINT_INFO("Boundary conditions test passed");
 }
 
-// 🔧 新增：数据完整性验证
+// 数据完整性验证
 void test_data_integrity() {
   PRINT_INFO("Data integrity test");
 
@@ -215,11 +193,10 @@ void test_data_integrity() {
   PRINT_INFO("Data integrity test passed");
 }
 
-// 🔧 新增：多线程数据一致性验证
-template <bool EnableCache = true, bool EnableAlign = true>
+// 多线程数据一致性验证
 void test_multithread_data_consistency_() {
   constexpr size_t N = 100000;
-  SPSCQueue<int, 1024, EnableCache, EnableAlign> q;
+  SPSCQueue<int, 1024> q;
   std::atomic<bool> done{false};
   std::vector<int> consumed_values;
   std::mutex consumed_mutex;
@@ -259,29 +236,14 @@ void test_multithread_data_consistency() {
 
   Timer timer;
   timer.reset();
-  test_multithread_data_consistency_<true, true>();
+  test_multithread_data_consistency_();
   PRINT_INFO("Cache=ON, Align=ON consistency verified in {}ms",
-             timer.elapsed_ms());
-
-  timer.reset();
-  test_multithread_data_consistency_<true, false>();
-  PRINT_INFO("Cache=ON, Align=OFF consistency verified in {}ms",
-             timer.elapsed_ms());
-
-  timer.reset();
-  test_multithread_data_consistency_<false, true>();
-  PRINT_INFO("Cache=OFF, Align=ON consistency verified in {}ms",
-             timer.elapsed_ms());
-
-  timer.reset();
-  test_multithread_data_consistency_<false, false>();
-  PRINT_INFO("Cache=OFF, Align=OFF consistency verified in {}ms",
              timer.elapsed_ms());
 
   PRINT_INFO("Multi-thread data consistency test passed");
 }
 
-// 🔧 新增：竞争条件测试
+// 竞争条件测试
 void test_race_conditions() {
   PRINT_INFO("Race conditions test");
   constexpr int iterations = 1000;
@@ -325,7 +287,7 @@ void test_race_conditions() {
   PRINT_INFO("Race conditions test passed ({} iterations)", iterations);
 }
 
-// 🔧 新增：批量操作正确性验证
+// 批量操作正确性验证
 void test_bulk_correctness() {
   PRINT_INFO("Bulk operations correctness test");
   SPSCQueue<int, 64> q;
@@ -370,7 +332,7 @@ void test_bulk_correctness() {
   PRINT_INFO("Bulk operations correctness test passed");
 }
 
-// 🔧 新增：压力测试
+// 压力测试
 void test_stress() {
   PRINT_INFO("Stress test");
   constexpr size_t stress_cycles = 10;
@@ -416,10 +378,9 @@ void test_stress() {
   PRINT_INFO("Stress test passed ({} cycles)", stress_cycles);
 }
 
-template <bool EnableCache = true, bool EnableAlign = true>
 void test_multithread_spsc_() {
   constexpr size_t N = 1000000;
-  SPSCQueue<int, 1024, EnableAlign, EnableCache> q;
+  SPSCQueue<int, 1024> q;
   std::atomic<bool> done{false};
 
   std::thread prod([&] {
@@ -451,21 +412,8 @@ void test_multithread_spsc() {
 
   Timer timer;
   timer.reset();
-  test_multithread_spsc_<true, true>();
+  test_multithread_spsc_();
   PRINT_INFO("Cache=ON, Align=ON time: {}ms", timer.elapsed_ms());
-
-  timer.reset();
-  test_multithread_spsc_<true, false>();
-  PRINT_INFO("Cache=ON, Align=OFF time: {}ms", timer.elapsed_ms());
-
-  timer.reset();
-  test_multithread_spsc_<false, true>();
-  PRINT_INFO("Cache=OFF, Align=ON time: {}ms", timer.elapsed_ms());
-
-  timer.reset();
-  test_multithread_spsc_<false, false>();
-  PRINT_INFO("Cache=OFF, Align=OFF time: {}ms", timer.elapsed_ms());
-
   PRINT_INFO("SPSC multi-thread test passed");
 }
 
@@ -500,19 +448,10 @@ void test_performance() {
   };
 
   SPSCQueue<int, 1024> q;
-  SPSCQueue<int, 1024, true, false> q_no_align;
-  SPSCQueue<int, 1024, false, true> q_no_cache;
-  SPSCQueue<int, 1024, false, false> q_no_cache_no_align;
   SPSCQueueOPT<int, 1024> raomeng_q;
 
   std::vector<TestConfig> configs = {
       {"SPSCQueue<Cache,Align>", [&]() { test_performance_spsc_(q, N); }},
-      {"SPSCQueue<Cache,NoAlign>",
-       [&]() { test_performance_spsc_(q_no_align, N); }},
-      {"SPSCQueue<NoCache,Align>",
-       [&]() { test_performance_spsc_(q_no_cache, N); }},
-      {"SPSCQueue<NoCache,NoAlign>",
-       [&]() { test_performance_spsc_(q_no_cache_no_align, N); }},
       {"SPSCQueueOPT", [&]() { test_raomeng_spsc_(raomeng_q, N); }}};
 
   for (const auto &config : configs) {
@@ -582,19 +521,10 @@ void test_performance_mt() {
   };
 
   SPSCQueue<int, cap> q;
-  SPSCQueue<int, cap, true, false> q_no_align;
-  SPSCQueue<int, cap, false, true> q_no_cache;
-  SPSCQueue<int, cap, false, false> q_nocache_no_align;
   SPSCQueueOPT<int, cap> raomeng_q;
 
   std::vector<MTTestConfig> configs = {
       {"SPSCQueue<Cache,Align>", [&]() { test_performance_mt_(q, N); }},
-      {"SPSCQueue<Cache,NoAlign>",
-       [&]() { test_performance_mt_(q_no_align, N); }},
-      {"SPSCQueue<NoCache,Align>",
-       [&]() { test_performance_mt_(q_no_cache, N); }},
-      {"SPSCQueue<NoCache,NoAlign>",
-       [&]() { test_performance_mt_(q_nocache_no_align, N); }},
       {"SPSCQueueOPT", [&]() { test_performance_mt_raomeng_(raomeng_q, N); }}};
 
   for (const auto &config : configs) {
@@ -651,19 +581,11 @@ void test_bulk_multithread() {
   };
 
   SPSCQueue<int, cap> q;
-  SPSCQueue<int, cap, true, false> q_no_align;
-  SPSCQueue<int, cap, false, true> q_no_cache;
-  SPSCQueue<int, cap, false, false> q_no_cache_no_align;
 
   std::vector<BulkTestConfig> configs = {
       {"SPSCQueue<Cache,Align>",
        [&]() { test_bulk_multithread_<BATCH>(q, N); }},
-      {"SPSCQueue<Cache,NoAlign>",
-       [&]() { test_bulk_multithread_<BATCH>(q_no_align, N); }},
-      {"SPSCQueue<NoCache,Align>",
-       [&]() { test_bulk_multithread_<BATCH>(q_no_cache, N); }},
-      {"SPSCQueue<NoCache,NoAlign>",
-       [&]() { test_bulk_multithread_<BATCH>(q_no_cache_no_align, N); }}};
+  };
 
   for (const auto &config : configs) {
     auto avg = Timer::measure(config.test_func, iter);
@@ -672,13 +594,269 @@ void test_bulk_multithread() {
   }
 }
 
+void print_latency_stats(const std::string &name,
+                         const stest::LatencyTester::LatencyStats &stats) {
+  PRINT_INFO("=== {} Latency Statistics ===", name);
+  PRINT_INFO("Min:     {} ns", stats.min_ns);
+  PRINT_INFO("Max:     {} ns", stats.max_ns);
+  PRINT_INFO("Avg:     {} ns", stats.avg_ns);
+  PRINT_INFO("Median:  {} ns", stats.median_ns);
+  PRINT_INFO("95th:    {} ns", stats.p95_ns);
+  PRINT_INFO("99th:    {} ns", stats.p99_ns);
+  PRINT_INFO("99.9th:  {} ns", stats.p999_ns);
+  PRINT_INFO("StdDev:  {} ns", stats.stddev_ns);
+  PRINT_INFO("");
+}
+
+// 🔧 单线程延迟测试 - Push操作
+void test_single_thread_push_latency() {
+  PRINT_INFO("Single-thread Push Latency Test");
+
+  constexpr size_t QUEUE_SIZE = 1024;
+  constexpr size_t WARMUP = 5000;
+  constexpr size_t ITERATIONS = 50000;
+
+  LatencyTester tester(WARMUP, ITERATIONS);
+
+  // 测试 SPSCQueue push
+  {
+    SPSCQueue<int, QUEUE_SIZE> q;
+    volatile int dummy; // 防止编译器优化
+
+    auto stats = tester.measure_latency("SPSCQueue Push", [&]() {
+      // 确保队列不满
+      if (q.size() >= QUEUE_SIZE - 10) {
+        int temp;
+        for (int i = 0; i < 10; ++i)
+          q.pop(temp);
+      }
+      q.push(42);
+    });
+
+    print_latency_stats("SPSCQueue Push", stats);
+  }
+
+  // 测试 raomeng SPSCQueueOPT push
+  {
+    SPSCQueueOPT<int, QUEUE_SIZE> q;
+
+    auto stats = tester.measure_latency("SPSCQueueOPT Push", [&]() {
+      // 确保队列不满
+      if (q.size() >= QUEUE_SIZE - 10) {
+        int temp;
+        for (int i = 0; i < 10; ++i) {
+          q.tryPop([&](const int *val) { temp = *val; });
+        }
+      }
+      q.tryPush([](int *p) { *p = 42; });
+    });
+
+    print_latency_stats("SPSCQueueOPT Push", stats);
+  }
+}
+
+// 🔧 单线程延迟测试 - Pop操作
+void test_single_thread_pop_latency() {
+  PRINT_INFO("Single-thread Pop Latency Test");
+
+  constexpr size_t QUEUE_SIZE = 1024;
+  constexpr size_t WARMUP = 5000;
+  constexpr size_t ITERATIONS = 50000;
+
+  LatencyTester tester(WARMUP, ITERATIONS);
+
+  // 测试 SPSCQueue pop
+  {
+    SPSCQueue<int, QUEUE_SIZE> q;
+
+    auto stats = tester.measure_latency("SPSCQueue Pop", [&]() {
+      // 确保队列有数据
+      if (q.size() < 10) {
+        for (int i = 0; i < 50; ++i)
+          q.push(i);
+      }
+      int value;
+      q.pop(value);
+    });
+
+    print_latency_stats("SPSCQueue Pop", stats);
+  }
+
+  // 测试 raomeng SPSCQueueOPT pop
+  {
+    SPSCQueueOPT<int, QUEUE_SIZE> q;
+
+    auto stats = tester.measure_latency("SPSCQueueOPT Pop", [&]() {
+      // 确保队列有数据
+      if (q.size() < 10) {
+        for (int i = 0; i < 50; ++i) {
+          q.tryPush([i](int *p) { *p = i; });
+        }
+      }
+      int value;
+      q.tryPop([&](const int *val) { value = *val; });
+    });
+
+    print_latency_stats("SPSCQueueOPT Pop", stats);
+  }
+}
+
+// 🔧 往返延迟测试 (Round-trip latency)
+void test_round_trip_latency() {
+  PRINT_INFO("Round-trip Latency Test (Push + Pop)");
+
+  constexpr size_t QUEUE_SIZE = 1024;
+  constexpr size_t WARMUP = 5000;
+  constexpr size_t ITERATIONS = 50000;
+
+  LatencyTester tester(WARMUP, ITERATIONS);
+
+  // 测试 SPSCQueue round-trip
+  {
+    SPSCQueue<int, QUEUE_SIZE> q;
+
+    auto stats = tester.measure_latency("SPSCQueue Round-trip", [&]() {
+      q.push(42);
+      int value;
+      q.pop(value);
+    });
+
+    print_latency_stats("SPSCQueue Round-trip", stats);
+  }
+
+  // 测试 raomeng SPSCQueueOPT round-trip
+  {
+    SPSCQueueOPT<int, QUEUE_SIZE> q;
+
+    auto stats = tester.measure_latency("SPSCQueueOPT Round-trip", [&]() {
+      q.tryPush([](int *p) { *p = 42; });
+      int value;
+      q.tryPop([&](const int *val) { value = *val; });
+    });
+
+    print_latency_stats("SPSCQueueOPT Round-trip", stats);
+  }
+}
+
+// 🔧 不同负载下的延迟测试
+void test_latency_under_load() {
+  PRINT_INFO("Latency Under Different Load Test");
+
+  constexpr size_t QUEUE_SIZE = 1024;
+  std::vector<double> load_factors = {0.1, 0.3, 0.5, 0.7, 0.9}; // 队列使用率
+
+  for (double load : load_factors) {
+    PRINT_INFO("Testing under {}% load", load * 100);
+
+    size_t target_elements = static_cast<size_t>(QUEUE_SIZE * load);
+
+    // SPSCQueue 负载测试
+    {
+      SPSCQueue<int, QUEUE_SIZE> q;
+
+      // 预先填充队列到目标负载
+      for (size_t i = 0; i < target_elements; ++i) {
+        q.push(static_cast<int>(i));
+      }
+
+      LatencyTester tester(1000, 5000);
+      auto stats = tester.measure_latency(
+          "SPSCQueue @" + std::to_string(static_cast<int>(load * 100)) + "%",
+          [&]() {
+            q.push(42);
+            int value;
+            q.pop(value);
+          });
+
+      PRINT_INFO("SPSCQueue @{}% load - Avg: {}ns, P95: {}ns",
+                 static_cast<int>(load * 100), stats.avg_ns, stats.p95_ns);
+    }
+
+    // SPSCQueueOPT 负载测试
+    {
+      SPSCQueueOPT<int, QUEUE_SIZE> q;
+
+      // 预先填充队列到目标负载
+      for (size_t i = 0; i < target_elements; ++i) {
+        q.tryPush([i](int *p) { *p = static_cast<int>(i); });
+      }
+
+      LatencyTester tester(1000, 5000);
+      auto stats = tester.measure_latency(
+          "SPSCQueueOPT @" + std::to_string(static_cast<int>(load * 100)) + "%",
+          [&]() {
+            q.tryPush([](int *p) { *p = 42; });
+            int value;
+            q.tryPop([&](const int *val) { value = *val; });
+          });
+
+      PRINT_INFO("SPSCQueueOPT @{}% load - Avg: {}ns, P95: {}ns",
+                 static_cast<int>(load * 100), stats.avg_ns, stats.p95_ns);
+    }
+
+    PRINT_INFO("");
+  }
+}
+
+// 🔧 批量操作延迟测试
+void test_bulk_operation_latency() {
+  PRINT_INFO("Bulk Operation Latency Test");
+
+  constexpr size_t QUEUE_SIZE = 1024;
+  std::vector<size_t> batch_sizes = {1, 4, 8, 16, 32, 64};
+
+  for (size_t batch_size : batch_sizes) {
+    PRINT_INFO("Testing batch size: {}", batch_size);
+
+    // SPSCQueue 批量操作测试
+    {
+      SPSCQueue<int, QUEUE_SIZE> q;
+      std::vector<int> data(batch_size);
+      std::iota(data.begin(), data.end(), 0);
+
+      LatencyTester tester(1000, 5000);
+      auto stats = tester.measure_latency(
+          "SPSCQueue Bulk " + std::to_string(batch_size), [&]() {
+            // 确保有足够空间
+            if (q.size() > QUEUE_SIZE - batch_size - 10) {
+              std::vector<int> temp(batch_size);
+              q.pop_bulk(temp.data(), batch_size);
+            }
+
+            q.push_bulk(data.data(), batch_size);
+
+            std::vector<int> temp(batch_size);
+            q.pop_bulk(temp.data(), batch_size);
+          });
+
+      double per_item_latency = stats.avg_ns / batch_size;
+      PRINT_INFO("SPSCQueue Bulk {} - Total: {}ns, Per-item: {}ns", batch_size,
+                 stats.avg_ns, per_item_latency);
+    }
+
+    PRINT_INFO("");
+  }
+}
+
+// 🔧 在 main 函数中添加延迟测试调用
+void run_latency_tests() {
+  PRINT_INFO("=== Starting Latency Tests ===");
+
+  test_single_thread_push_latency();
+  test_single_thread_pop_latency();
+  test_round_trip_latency();
+  test_latency_under_load();
+  test_bulk_operation_latency();
+
+  PRINT_INFO("=== Latency Tests Completed ===");
+}
+
 int main() {
   try {
     PRINT_INFO("Starting SPSC queue test suite");
 
     test_single_thread();
     test_bulk();
-    test_cache_align_switch();
     test_fifo_correctness();
     test_boundary_conditions();
     test_data_integrity();
@@ -688,6 +866,8 @@ int main() {
     test_multithread_data_consistency();
     test_race_conditions();
     test_stress();
+
+    run_latency_tests();
 
     // 🔧 性能测试
     test_performance();

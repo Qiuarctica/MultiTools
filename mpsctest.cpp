@@ -9,9 +9,6 @@
 
 using namespace stest;
 
-// Enable assertions
-#define STEST_ENABLE_ASSERT 1
-
 void test_single_thread() {
   PRINT_INFO("MPSC single-thread functionality test");
   MPSCQueue<int, 8> q;
@@ -66,7 +63,7 @@ void test_writer_reader_semantics() {
   PRINT_INFO("Writer/Reader semantics test passed");
 }
 
-// 🔧 新增：FIFO 顺序验证
+// FIFO 顺序验证
 void test_fifo_correctness() {
   PRINT_INFO("MPSC FIFO order correctness test");
   MPSCQueue<int, 64> q;
@@ -122,7 +119,7 @@ void test_fifo_correctness() {
   PRINT_INFO("FIFO order correctness test passed");
 }
 
-// 🔧 新增：边界条件测试
+// 边界条件测试
 void test_boundary_conditions() {
   PRINT_INFO("MPSC boundary conditions test");
   MPSCQueue<int, 16> q;
@@ -159,7 +156,7 @@ void test_boundary_conditions() {
   PRINT_INFO("Boundary conditions test passed");
 }
 
-// 🔧 新增：数据完整性验证
+// 数据完整性验证
 void test_data_integrity() {
   PRINT_INFO("MPSC data integrity test");
 
@@ -294,7 +291,7 @@ void test_multi_producer_basic() {
   PRINT_INFO("Multi-producer basic test passed");
 }
 
-// 🔧 新增：多生产者顺序验证
+// 多生产者顺序验证
 void test_multi_producer_ordering() {
   PRINT_INFO("MPSC multi-producer ordering test");
   constexpr int num_producers = 3;
@@ -431,7 +428,7 @@ void test_multi_producer_stress() {
   PRINT_INFO("Multi-producer stress test passed");
 }
 
-// 🔧 新增：竞争条件压力测试
+// 竞争条件压力测试
 void test_race_conditions_intensive() {
   PRINT_INFO("MPSC intensive race conditions test");
   constexpr int iterations = 500;
@@ -577,27 +574,35 @@ void test_performance() {
 void test_concurrent_enqueue_dequeue() {
   PRINT_INFO("MPSC concurrent enqueue/dequeue test");
   constexpr int num_producers = 6;
-  constexpr int test_duration_ms = 5000;
+  constexpr int operations_per_producer = 100000; // 🔧 使用确定数量而非时间
+  constexpr int total_expected = num_producers * operations_per_producer;
 
   MPSCQueue<int, 256, 6> q;
-  std::atomic<bool> stop_flag{false};
   std::atomic<int> total_produced{0};
   std::atomic<int> total_consumed{0};
   std::vector<std::thread> producers;
+
+  Timer timer;
+  timer.reset();
 
   // Start producer threads
   for (int p = 0; p < num_producers; ++p) {
     producers.emplace_back([&, p]() {
       int local_produced = 0;
       int value = p * 1000000;
-      while (!stop_flag.load()) {
-        if (q.push(value++)) {
-          ++local_produced;
+
+      // 🔧 生产固定数量的数据
+      for (int i = 0; i < operations_per_producer; ++i) {
+        while (!q.push(value++)) {
+          std::this_thread::yield();
         }
-        if (local_produced % 100 == 0) {
+        ++local_produced;
+
+        if (local_produced % 1000 == 0) {
           std::this_thread::yield();
         }
       }
+
       total_produced.fetch_add(local_produced);
     });
   }
@@ -606,7 +611,9 @@ void test_concurrent_enqueue_dequeue() {
   std::thread consumer([&]() {
     int value;
     int local_consumed = 0;
-    while (!stop_flag.load()) {
+
+    // 🔧 消费固定数量的数据
+    while (local_consumed < total_expected) {
       if (q.pop(value)) {
         ++local_consumed;
       } else {
@@ -614,17 +621,8 @@ void test_concurrent_enqueue_dequeue() {
       }
     }
 
-    // Process remaining data
-    while (q.pop(value)) {
-      ++local_consumed;
-    }
-
     total_consumed.store(local_consumed);
   });
-
-  // Run for specified time
-  std::this_thread::sleep_for(std::chrono::milliseconds(test_duration_ms));
-  stop_flag.store(true);
 
   // Wait for completion
   for (auto &t : producers) {
@@ -632,16 +630,20 @@ void test_concurrent_enqueue_dequeue() {
   }
   consumer.join();
 
+  auto elapsed = timer.elapsed_ms();
+
   PRINT_INFO("Concurrent test results:");
-  PRINT_INFO("Runtime: {}ms", test_duration_ms);
+  PRINT_INFO("Runtime: {}ms", elapsed);
   PRINT_INFO("Producers: {}", num_producers);
+  PRINT_INFO("Operations per producer: {}", operations_per_producer);
   PRINT_INFO("Total produced: {}", total_produced.load());
   PRINT_INFO("Total consumed: {}", total_consumed.load());
   PRINT_INFO("Production rate: {} ops/ms",
-             total_produced.load() / double(test_duration_ms));
+             total_produced.load() / double(elapsed));
 
-  // Verify data consistency
-  ASSERT_EQ(total_produced.load(), total_consumed.load());
+  // 🔧 严格验证
+  ASSERT_EQ(total_produced.load(), total_expected);
+  ASSERT_EQ(total_consumed.load(), total_expected);
 
   PRINT_INFO("Concurrent enqueue/dequeue test passed");
 }
@@ -731,7 +733,7 @@ void test_different_types() {
   PRINT_INFO("Different types test passed");
 }
 
-// 🔧 新增：批量操作测试（如果实现了的话）
+// 批量操作测试（如果实现了的话）
 void test_bulk_operations() {
   PRINT_INFO("MPSC bulk operations test");
 
@@ -758,27 +760,23 @@ int main() {
   try {
     PRINT_INFO("Starting MPSC queue test suite");
 
-    // 🔧 基础正确性测试
     test_single_thread();
     test_writer_reader_semantics();
-    test_fifo_correctness();    // 新增
-    test_boundary_conditions(); // 新增
-    test_data_integrity();      // 新增
+    test_fifo_correctness();
+    test_boundary_conditions();
+    test_data_integrity();
 
-    // 🔧 多线程正确性测试
     test_single_producer();
     test_multi_producer_basic();
-    test_multi_producer_ordering(); // 新增
+    test_multi_producer_ordering();
     test_multi_producer_stress();
     test_race_conditions();
-    test_race_conditions_intensive(); // 新增
+    test_race_conditions_intensive();
     test_concurrent_enqueue_dequeue();
 
-    // 🔧 类型和语义测试
     test_different_types();
-    test_bulk_operations(); // 新增
+    test_bulk_operations();
 
-    // 🔧 性能测试
     test_performance();
 
     PRINT_INFO("All MPSC tests completed successfully");

@@ -87,6 +87,8 @@ public:
     return true;
   }
 
+  size_t size() { return (write_idx - read_idx + CNT) % CNT; }
+
 private:
   struct alignas(64) Block {
     bool avail = false; // avail will be updated by both write and read thread
