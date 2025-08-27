@@ -284,29 +284,9 @@ public:
   [[gnu::pure]] constexpr size_t capacity() const noexcept {
     return Capacity - 1; // 保留一个位置用于区分满和空
   }
-  // 🔧 性能调优接口
   void warm_cache() noexcept {
     // 预热缓存，减少首次访问延迟
     prod_.cached_tail = cons_.tail.load(std::memory_order_relaxed);
     cons_.cached_head = prod_.head.load(std::memory_order_relaxed);
   }
-
-// 🔧 调试和监控接口
-#ifdef SPSC_DEBUG
-  struct DebugInfo {
-    size_t head, tail, cached_head, cached_tail;
-    size_t current_size, available_space;
-  };
-
-  DebugInfo debug_info() const noexcept {
-    const size_t h = prod_.head.load(std::memory_order_relaxed);
-    const size_t t = cons_.tail.load(std::memory_order_relaxed);
-    return {h,
-            t,
-            cons_.cached_head,
-            prod_.cached_tail,
-            (h - t) & mask(),
-            available_space(h, t)};
-  }
-#endif
 };

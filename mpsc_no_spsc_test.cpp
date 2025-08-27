@@ -545,7 +545,7 @@ void test_performance_mpsc_(MPSCQueue<int, 1024> &q, const size_t N) {
 void test_performance() {
   PRINT_INFO("MPSC performance test");
   constexpr size_t iter = 50;
-  constexpr size_t N = 1'000'000'0;
+  constexpr size_t N = 1'000'00;
 
   MPSCQueue<int, 1024> q1;
 
@@ -556,7 +556,9 @@ void test_performance() {
 
   std::vector<TestConfig> configs = {
       {"MPSC<1P>", [&]() { test_performance_mpsc_<1>(q1, N); }},
-  };
+      {"MPSC<2P>", [&]() { test_performance_mpsc_<2>(q1, N); }},
+      {"MPSC<4P>", [&]() { test_performance_mpsc_<4>(q1, N); }},
+      {"MPSC<8P>", [&]() { test_performance_mpsc_<8>(q1, N); }}};
 
   for (const auto &config : configs) {
     PRINT_INFO("{} performance test", config.name);
