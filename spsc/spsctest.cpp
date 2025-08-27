@@ -1,6 +1,6 @@
 #include "spsc.h"
+#include "../utils/test_suit.h"
 #include "raomeng_spsc.h"
-#include "test_suit.h"
 #include <atomic>
 #include <thread>
 #include <vector>

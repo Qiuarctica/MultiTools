@@ -1,8 +1,6 @@
-#include "mpsc_no_spsc.h"
-#include "test_suit.h"
+#include "spsc_based_mpsc.h"
+#include "../utils/test_suit.h"
 #include <atomic>
-#include <chrono>
-#include <cstring>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -506,7 +504,8 @@ void test_race_conditions_intensive() {
 }
 
 template <int num_producers>
-void test_performance_mpsc_(MPSCQueue<int, 1024> &q, const size_t N) {
+void test_performance_mpsc_(MPSCQueue<int, 1024, num_producers> &q,
+                            const size_t N) {
   std::vector<std::thread> producers;
 
   // Start producer threads
@@ -545,9 +544,12 @@ void test_performance_mpsc_(MPSCQueue<int, 1024> &q, const size_t N) {
 void test_performance() {
   PRINT_INFO("MPSC performance test");
   constexpr size_t iter = 50;
-  constexpr size_t N = 1'000'00;
+  constexpr size_t N = 1'000'000;
 
-  MPSCQueue<int, 1024> q1;
+  MPSCQueue<int, 1024, 1> q1;
+  MPSCQueue<int, 1024, 2> q2;
+  MPSCQueue<int, 1024, 4> q4;
+  MPSCQueue<int, 1024, 8> q8;
 
   struct TestConfig {
     std::string name;
@@ -556,9 +558,9 @@ void test_performance() {
 
   std::vector<TestConfig> configs = {
       {"MPSC<1P>", [&]() { test_performance_mpsc_<1>(q1, N); }},
-      {"MPSC<2P>", [&]() { test_performance_mpsc_<2>(q1, N); }},
-      {"MPSC<4P>", [&]() { test_performance_mpsc_<4>(q1, N); }},
-      {"MPSC<8P>", [&]() { test_performance_mpsc_<8>(q1, N); }}};
+      {"MPSC<2P>", [&]() { test_performance_mpsc_<2>(q2, N); }},
+      {"MPSC<4P>", [&]() { test_performance_mpsc_<4>(q4, N); }},
+      {"MPSC<8P>", [&]() { test_performance_mpsc_<8>(q8, N); }}};
 
   for (const auto &config : configs) {
     PRINT_INFO("{} performance test", config.name);
@@ -574,7 +576,7 @@ void test_concurrent_enqueue_dequeue() {
   constexpr int operations_per_producer = 100000; // 🔧 使用确定数量而非时间
   constexpr int total_expected = num_producers * operations_per_producer;
 
-  MPSCQueue<int, 256> q;
+  MPSCQueue<int, 256, 6> q;
   std::atomic<int> total_produced{0};
   std::atomic<int> total_consumed{0};
   std::vector<std::thread> producers;
@@ -650,7 +652,7 @@ void test_race_conditions() {
   constexpr int iterations = 1000;
 
   for (int iter = 0; iter < iterations; ++iter) {
-    MPSCQueue<int, 16> q;
+    MPSCQueue<int, 16, 3> q;
     constexpr int num_producers = 3;
     constexpr int items_per_producer = 10;
 
@@ -757,22 +759,22 @@ int main() {
   try {
     PRINT_INFO("Starting MPSC queue test suite");
 
-    // test_single_thread();
-    // test_writer_reader_semantics();
-    // test_fifo_correctness();
-    // test_boundary_conditions();
-    // test_data_integrity();
+    test_single_thread();
+    test_writer_reader_semantics();
+    test_fifo_correctness();
+    test_boundary_conditions();
+    test_data_integrity();
 
-    // test_single_producer();
-    // test_multi_producer_basic();
-    // test_multi_producer_ordering();
-    // test_multi_producer_stress();
-    // test_race_conditions();
-    // test_race_conditions_intensive();
-    // test_concurrent_enqueue_dequeue();
+    test_single_producer();
+    test_multi_producer_basic();
+    test_multi_producer_ordering();
+    test_multi_producer_stress();
+    test_race_conditions();
+    test_race_conditions_intensive();
+    test_concurrent_enqueue_dequeue();
 
-    // test_different_types();
-    // test_bulk_operations();
+    test_different_types();
+    test_bulk_operations();
 
     test_performance();
 

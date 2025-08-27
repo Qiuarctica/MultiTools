@@ -1,13 +1,10 @@
 #pragma once
 
+#include "../utils/defs.h"
 #include <array>
 #include <atomic>
-#include <emmintrin.h>
-#include <memory>
-#include <thread>
 #include <vector>
 
-#include "defs.h"
 template <typename T, size_t Capacity> class MPSCQueue {
 private:
   struct Slot {
