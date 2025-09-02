@@ -1,4 +1,5 @@
 #pragma once
+#define SPSC_BASED_MPSC_HEADER
 
 #include "../spsc/spsc.h"
 #include "../utils/defs.h"
@@ -12,9 +13,9 @@ class MPSCQueue {
   using SPSCType = SPSCQueue<T, Capacity>;
 
 private:
-  alignas(CacheLineSize) std::array<SPSCType, MaxProducers> queues_;
+  std::array<SPSCType, MaxProducers> queues_;
+  size_t consumer_round_robin_{0};
   alignas(CacheLineSize) std::atomic<size_t> producer_counter_{0};
-  alignas(CacheLineSize) mutable std::atomic<size_t> consumer_round_robin_{0};
 
   thread_local static size_t my_queue_id_;
   thread_local static bool queue_assigned_;
@@ -54,14 +55,12 @@ public:
   }
 
   template <Reader<T> R> bool pop(R reader) noexcept {
-    const size_t start_idx =
-        consumer_round_robin_.load(std::memory_order_relaxed);
+    const size_t start_idx = consumer_round_robin_;
 
     for (size_t i = 0; i < MaxProducers; ++i) {
       const size_t queue_idx = (start_idx + i) % MaxProducers;
       if (queues_[queue_idx].pop(reader)) {
-        consumer_round_robin_.store((queue_idx + 1) % MaxProducers,
-                                    std::memory_order_relaxed);
+        consumer_round_robin_ = queue_idx;
         return true;
       }
     }
@@ -74,8 +73,7 @@ public:
 
   template <Reader<T> R> size_t pop_bulk(R reader, size_t max_items) noexcept {
     size_t total_popped = 0;
-    const size_t start_idx =
-        consumer_round_robin_.load(std::memory_order_relaxed);
+    const size_t start_idx = consumer_round_robin_;
 
     for (size_t round = 0; round < MaxProducers && total_popped < max_items;
          ++round) {
@@ -92,8 +90,7 @@ public:
       }
 
       if (total_popped > 0) {
-        consumer_round_robin_.store((queue_idx + 1) % MaxProducers,
-                                    std::memory_order_relaxed);
+        consumer_round_robin_ = (queue_idx + 1) % MaxProducers;
       }
     }
 

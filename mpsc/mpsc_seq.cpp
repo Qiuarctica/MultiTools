@@ -73,10 +73,10 @@ private:
       bool valid = false;
       SeqData data;
     };
-    alignas(64) std::array<Slot, 1024> fast_buffer_{};
+    std::array<Slot, 1024> fast_buffer_{};
     std::unordered_map<uint64_t, SeqData> overflow_buffer_{};
-    alignas(64) uint64_t next_expected_seq_ = 0;
-    alignas(64) SPSCQueue<SeqData, 4096> output_queue_;
+    uint64_t next_expected_seq_ = 0;
+    SPSCQueue<SeqData, 4096> output_queue_;
 
     MPSCQueue<SeqData, 1024> &source_queue_;
     std::atomic<bool> stop_{false};
@@ -181,8 +181,11 @@ private:
     }
 
   public:
-    explicit Reorderer(MPSCQueue<SeqData, 1024> &source)
+    explicit Reorderer(MPSCQueue<SeqData, 1024> &source, bool enable_reorder)
         : source_queue_(source) {
+      if (!enable_reorder) {
+        return;
+      }
       worker_thread_ = std::thread([this]() { reorder_work(); });
     }
     ~Reorderer() {
@@ -223,10 +226,11 @@ private:
   std::vector<std::thread> threads_;
   static constexpr size_t num_consumers_ = 4;
   std::atomic<bool> stop_ = false;
-  Reorderer reorderer_{queue_};
+  Reorderer reorderer_;
 
 public:
-  SeqMpsc() : spsc_queues_(num_consumers_) {
+  explicit SeqMpsc(bool enable_reorder)
+      : spsc_queues_(num_consumers_), reorderer_(queue_, enable_reorder) {
     threads_.emplace_back(&SeqMpsc::produce_thread, this);
     for (size_t i = 0; i < num_consumers_; ++i) {
       threads_.emplace_back(&SeqMpsc::consume_thread, this, i);
@@ -249,9 +253,9 @@ public:
   void print_debug_info() { reorderer_.print_debug_info(); }
 };
 
-void test_seq_ordering() {
+double test_seq_ordering() {
   PRINT_INFO("开始基于访问次数的丢失检测测试...");
-  SeqMpsc pipeline;
+  SeqMpsc pipeline(true);
   SeqMpsc::SeqData data;
   auto start_time = std::chrono::high_resolution_clock::now();
 
@@ -259,7 +263,7 @@ void test_seq_ordering() {
   size_t received_count = 0;
   size_t discontinuity_count = 0;
 
-  while (received_count < 5000000) {
+  while (received_count < 500000) {
     while (!pipeline.get_next_ordered_data(data)) {
       ;
     }
@@ -275,9 +279,55 @@ void test_seq_ordering() {
   std::chrono::duration<double> duration = end_time - start_time;
   PRINT_INFO("基于访问次数的丢失检测测试完成，耗时: " +
              std::to_string(duration.count()) + "秒");
-  PRINT_INFO("传输带宽：" + std::to_string(received_count / duration.count()) +
-             " 数据/s");
+  double throughput = received_count / duration.count();
+  PRINT_INFO("传输带宽：" + std::to_string(throughput) + " 数据/s");
   pipeline.print_debug_info();
+  return throughput;
 }
 
-int main() { test_seq_ordering(); }
+double test_origin() {
+  PRINT_INFO("无排序性能测试...");
+  SeqMpsc pipeline(false);
+  SeqMpsc::SeqData data;
+  auto start_time = std::chrono::high_resolution_clock::now();
+
+  uint64_t last_seq = -1;
+  size_t received_count = 0;
+  size_t discontinuity_count = 0;
+
+  while (received_count < 500000) {
+    while (!pipeline.get_next_data(data)) {
+      ;
+    }
+    if (data.seq != last_seq + 1) {
+      discontinuity_count++;
+    }
+    last_seq = data.seq;
+    received_count++;
+  }
+  auto end_time = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double> duration = end_time - start_time;
+  PRINT_INFO("无排序测试完成，耗时: " + std::to_string(duration.count()) +
+             "秒");
+  double throughput = received_count / duration.count();
+  PRINT_INFO("传输带宽：" + std::to_string(throughput) + " 数据/s");
+  return throughput;
+}
+
+int main() {
+  // 运行十次取平均
+  const int num_iterations = 10;
+  double reorder_total = 0;
+  double origin_total = 0;
+
+  for (int i = 0; i < num_iterations; ++i) {
+    reorder_total += test_seq_ordering();
+    origin_total += test_origin();
+  }
+
+  auto reorder = reorder_total / num_iterations;
+  auto origin = origin_total / num_iterations;
+  // 计算性能损失
+  double loss = (origin - reorder) / origin * 100;
+  PRINT_INFO("性能损失: " + std::to_string(loss) + "%");
+}

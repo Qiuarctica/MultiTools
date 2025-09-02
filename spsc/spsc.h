@@ -27,7 +27,7 @@ private:
 
   ProducerState prod_;
   ConsumerState cons_;
-  alignas(CacheLineSize) std::array<T, Capacity> buffer_;
+  std::array<T, Capacity> buffer_;
 
   static constexpr size_t mask() noexcept { return Capacity - 1; }
 

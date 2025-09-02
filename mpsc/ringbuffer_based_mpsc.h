@@ -9,15 +9,15 @@
 template <typename T, size_t Capacity, size_t SIZE = 0> class MPSCQueue {
 private:
   struct Slot {
-    alignas(CacheLineSize) T data;
+    T data;
   };
 
-  alignas(CacheLineSize) std::array<Slot, Capacity> buffer_;
+  std::array<Slot, Capacity> buffer_;
   alignas(CacheLineSize) std::atomic<size_t> tail_{0}; // 生产者尾部
   alignas(CacheLineSize) std::atomic<size_t> head_{0}; // 消费者头部
 
   // 使用序列号数组替代每个slot的状态
-  alignas(CacheLineSize) std::array<std::atomic<size_t>, Capacity> sequences_;
+  std::array<std::atomic<size_t>, Capacity> sequences_;
 
   static thread_local size_t tls_cached_head_;
 
