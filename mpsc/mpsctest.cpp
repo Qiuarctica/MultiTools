@@ -1,8 +1,15 @@
 #include "../utils/test_suit.h"
+#ifdef RINGBUFFER
 #include "ringbuffer_based_mpsc.h"
+#elif SPSCBASED
+#include "spsc_based_mpsc.h"
+#else
+#include "spsc_based_mpsc.h"
+#endif
+
 #include <atomic>
+#include <chrono>
 #include <cstring>
-#include <mutex>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -505,7 +512,8 @@ void test_race_conditions_intensive() {
 }
 
 template <int num_producers>
-void test_performance_mpsc_(MPSCQueue<int, 1024> &q, const size_t N) {
+void test_performance_mpsc_(MPSCQueue<int, 1024, num_producers> &q,
+                            const size_t N) {
   std::vector<std::thread> producers;
 
   // Start producer threads
@@ -544,9 +552,12 @@ void test_performance_mpsc_(MPSCQueue<int, 1024> &q, const size_t N) {
 void test_performance() {
   PRINT_INFO("MPSC performance test");
   constexpr size_t iter = 50;
-  constexpr size_t N = 1'000'00;
+  constexpr size_t N = 1'000'000;
 
-  MPSCQueue<int, 1024> q1;
+  MPSCQueue<int, 1024, 1> q1;
+  MPSCQueue<int, 1024, 2> q2;
+  MPSCQueue<int, 1024, 4> q4;
+  MPSCQueue<int, 1024, 8> q8;
 
   struct TestConfig {
     std::string name;
@@ -555,9 +566,9 @@ void test_performance() {
 
   std::vector<TestConfig> configs = {
       {"MPSC<1P>", [&]() { test_performance_mpsc_<1>(q1, N); }},
-      {"MPSC<2P>", [&]() { test_performance_mpsc_<2>(q1, N); }},
-      {"MPSC<4P>", [&]() { test_performance_mpsc_<4>(q1, N); }},
-      {"MPSC<8P>", [&]() { test_performance_mpsc_<8>(q1, N); }}};
+      {"MPSC<2P>", [&]() { test_performance_mpsc_<2>(q2, N); }},
+      {"MPSC<4P>", [&]() { test_performance_mpsc_<4>(q4, N); }},
+      {"MPSC<8P>", [&]() { test_performance_mpsc_<8>(q8, N); }}};
 
   for (const auto &config : configs) {
     PRINT_INFO("{} performance test", config.name);
@@ -573,7 +584,7 @@ void test_concurrent_enqueue_dequeue() {
   constexpr int operations_per_producer = 100000; // 🔧 使用确定数量而非时间
   constexpr int total_expected = num_producers * operations_per_producer;
 
-  MPSCQueue<int, 256> q;
+  MPSCQueue<int, 256, 6> q;
   std::atomic<int> total_produced{0};
   std::atomic<int> total_consumed{0};
   std::vector<std::thread> producers;
@@ -649,7 +660,7 @@ void test_race_conditions() {
   constexpr int iterations = 1000;
 
   for (int iter = 0; iter < iterations; ++iter) {
-    MPSCQueue<int, 16> q;
+    MPSCQueue<int, 16, 3> q;
     constexpr int num_producers = 3;
     constexpr int items_per_producer = 10;
 
@@ -694,84 +705,140 @@ void test_race_conditions() {
   PRINT_INFO("Race condition test passed ({} iterations)", iterations);
 }
 
-void test_different_types() {
-  PRINT_INFO("MPSC different types test");
+// 通用的延迟测试函数
+template <typename QueueType>
+void test_latency_with_producers(QueueType &q, int num_producers,
+                                 size_t messages_per_producer) {
+  const size_t total_messages = num_producers * messages_per_producer;
 
-  // Test struct
-  struct TestData {
-    int id;
-    double value;
-    bool operator==(const TestData &other) const {
-      return id == other.id && value == other.value;
+  // 启动生产者线程
+  std::vector<std::vector<uint64_t>> producer_latencies(num_producers);
+  std::vector<std::thread> producers;
+  for (int p = 0; p < num_producers; ++p) {
+    producers.emplace_back([&, p]() mutable {
+      for (size_t i = 0; i < messages_per_producer; ++i) {
+        auto timestamp = std::chrono::high_resolution_clock::now();
+
+        while (!q.push(timestamp)) {
+          std::this_thread::yield();
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+        producer_latencies[p].push_back(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(end -
+                                                                 timestamp)
+                .count());
+
+        // 适当的间隔避免过度竞争
+        if (num_producers > 1 && i % 100 == 0) {
+          std::this_thread::sleep_for(std::chrono::nanoseconds(10));
+        }
+      }
+    });
+  }
+
+  // 消费者线程
+  // 测量消费者线程pop平均延迟
+  std::vector<uint64_t> consumer_latencies;
+  std::thread consumer([&]() {
+    std::chrono::high_resolution_clock::time_point timestamp;
+    size_t consumed = 0;
+
+    while (consumed < total_messages) {
+      auto start = std::chrono::high_resolution_clock::now();
+      while (!q.pop(timestamp)) {
+        std::this_thread::yield();
+      }
+      auto end = std::chrono::high_resolution_clock::now();
+      consumer_latencies.push_back(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(end - start)
+              .count());
+      consumed++;
     }
-  };
+  });
 
-  MPSCQueue<TestData, 16> q;
-
-  TestData input{42, 3.14};
-  ASSERT(q.push(input));
-
-  TestData output;
-  ASSERT(q.pop(output));
-  ASSERT(output == input);
-
-  // Test Writer/Reader semantics
-  ASSERT(q.push([](TestData *ptr) {
-    ptr->id = 100;
-    ptr->value = 2.71;
-  }));
-
-  ASSERT(q.pop([](const TestData *ptr) {
-    ASSERT_EQ(ptr->id, 100);
-    ASSERT_NEAR(ptr->value, 2.71, 0.001);
-  }));
-
-  PRINT_INFO("Different types test passed");
+  // 等待完成
+  for (auto &t : producers) {
+    t.join();
+  }
+  consumer.join();
+  // 打印消费者延迟统计信息
+  if (!consumer_latencies.empty()) {
+    double sum = 0;
+    for (const auto &lat : consumer_latencies) {
+      sum += lat;
+    }
+    double avg_lat = sum / consumer_latencies.size();
+    PRINT_INFO("Consumer - Avg: {}ns", static_cast<int64_t>(avg_lat));
+  } // 打印local_latencies的平均值
+  for (auto latency : producer_latencies) {
+    if (!latency.empty()) {
+      double sum = 0;
+      for (const auto &lat : latency) {
+        sum += lat;
+      }
+      double avg_lat = sum / latency.size();
+      PRINT_INFO("Producer - Avg: {}ns", static_cast<int64_t>(avg_lat));
+    }
+  }
 }
 
-// 批量操作测试（如果实现了的话）
-void test_bulk_operations() {
-  PRINT_INFO("MPSC bulk operations test");
+// 不同生产者数量下的延迟对比测试
+void test_producer_scaling_latency() {
+  PRINT_INFO("MPSC Producer Scaling Latency Test");
 
-  // 这个测试假设MPSCQueue支持批量操作
-  // 如果不支持，可以跳过或注释掉
-  /*
-  MPSCQueue<int, 64> q;
+  constexpr size_t QUEUE_CAPACITY = 1024;
+  constexpr size_t MESSAGES_PER_PRODUCER = 10000;
 
-  // Test bulk push if available
-  std::vector<int> input_data = {1, 2, 3, 4, 5};
-  // size_t pushed = q.push_bulk(input_data.data(), input_data.size());
-  // ASSERT_EQ(pushed, input_data.size());
+  std::vector<int> producer_counts = {1, 2, 4, 8};
 
-  // Test bulk pop if available
-  std::vector<int> output_data(10);
-  // size_t popped = q.pop_bulk(output_data.data(), output_data.size());
-  // ASSERT_EQ(popped, input_data.size());
-  */
+  for (int num_producers : producer_counts) {
+    PRINT_INFO("Testing with {} producer(s)", num_producers);
 
-  PRINT_INFO("Bulk operations test skipped (not implemented)");
+    if (num_producers == 1) {
+      MPSCQueue<std::chrono::high_resolution_clock::time_point, QUEUE_CAPACITY,
+                1>
+          q;
+      test_latency_with_producers(q, num_producers, MESSAGES_PER_PRODUCER);
+    } else if (num_producers == 2) {
+      MPSCQueue<std::chrono::high_resolution_clock::time_point, QUEUE_CAPACITY,
+                2>
+          q;
+      test_latency_with_producers(q, num_producers, MESSAGES_PER_PRODUCER);
+    } else if (num_producers == 4) {
+      MPSCQueue<std::chrono::high_resolution_clock::time_point, QUEUE_CAPACITY,
+                4>
+          q;
+      test_latency_with_producers(q, num_producers, MESSAGES_PER_PRODUCER);
+    } else if (num_producers == 8) {
+      MPSCQueue<std::chrono::high_resolution_clock::time_point, QUEUE_CAPACITY,
+                8>
+          q;
+      test_latency_with_producers(q, num_producers, MESSAGES_PER_PRODUCER);
+    }
+
+    PRINT_INFO("");
+  }
 }
 
 int main() {
   try {
     PRINT_INFO("Starting MPSC queue test suite");
 
-    // test_single_thread();
-    // test_writer_reader_semantics();
-    // test_fifo_correctness();
-    // test_boundary_conditions();
-    // test_data_integrity();
+    test_single_thread();
+    test_writer_reader_semantics();
+    test_fifo_correctness();
+    test_boundary_conditions();
+    test_data_integrity();
 
-    // test_single_producer();
-    // test_multi_producer_basic();
-    // test_multi_producer_ordering();
-    // test_multi_producer_stress();
-    // test_race_conditions();
-    // test_race_conditions_intensive();
-    // test_concurrent_enqueue_dequeue();
+    test_single_producer();
+    test_multi_producer_basic();
+    test_multi_producer_ordering();
+    test_multi_producer_stress();
+    test_race_conditions();
+    test_race_conditions_intensive();
+    test_concurrent_enqueue_dequeue();
 
-    // test_different_types();
-    // test_bulk_operations();
+    test_producer_scaling_latency();
 
     test_performance();
 

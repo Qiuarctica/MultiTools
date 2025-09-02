@@ -5,7 +5,8 @@
 #include <atomic>
 #include <vector>
 
-template <typename T, size_t Capacity> class MPSCQueue {
+// SIZE无用，用于统一测试接口
+template <typename T, size_t Capacity, size_t SIZE = 0> class MPSCQueue {
 private:
   struct Slot {
     alignas(CacheLineSize) T data;
@@ -105,5 +106,5 @@ public:
   size_t capacity() const noexcept { return Capacity + 1; }
 };
 
-template <typename T, size_t Capacity>
-thread_local size_t MPSCQueue<T, Capacity>::tls_cached_head_ = 0;
+template <typename T, size_t Capacity, size_t SIZE>
+thread_local size_t MPSCQueue<T, Capacity, SIZE>::tls_cached_head_ = 0;
