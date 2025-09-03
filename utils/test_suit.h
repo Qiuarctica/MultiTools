@@ -56,7 +56,7 @@ std::string format_string(const std::string &format, Args &&...args) {
   }
 }
 
-enum class LogLevel { Debug, Info, Warning, Error, Fatal };
+enum class LogLevel { Debug, Info, Warning, Error, Fatal, Success };
 
 inline std::string log_level_to_string(LogLevel level) {
   switch (level) {
@@ -70,6 +70,8 @@ inline std::string log_level_to_string(LogLevel level) {
     return "\033[1;31mERROR\033[0m";
   case LogLevel::Fatal:
     return "\033[1;31mFATAL\033[0m";
+  case LogLevel::Success:
+    return "\033[1;32mSUCCESS\033[0m";
   default:
     return "UNKNOWN";
   }
@@ -192,6 +194,7 @@ private:
 #define PRINT_WARNING(...) stest::print(stest::LogLevel::Warning, __VA_ARGS__)
 #define PRINT_ERROR(...) stest::print(stest::LogLevel::Error, __VA_ARGS__)
 #define PRINT_FATAL(...) stest::print(stest::LogLevel::Fatal, __VA_ARGS__)
+#define PRINT_SUCCESS(...) stest::print(stest::LogLevel::Success, __VA_ARGS__)
 
 class LatencyTester {
 private:

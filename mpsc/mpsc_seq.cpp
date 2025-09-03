@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
+// 存在数据复制的排序MPSC，对于小数据性能较好，对于大数据不宜使用，需要使用原地算法
 class SeqMpsc {
 public:
   struct SeqData {
@@ -83,11 +84,11 @@ private:
     std::thread worker_thread_;
 
     // debug info
-    std::atomic<uint64_t> processed_count_{0};
-    std::atomic<uint64_t> direct_hit_count_{0};
-    std::atomic<uint64_t> l1_cached_count_{0};
-    std::atomic<uint64_t> l2_cached_count_{0};
-    std::atomic<uint64_t> max_disordered_count_{0};
+    uint64_t processed_count_{0};
+    uint64_t direct_hit_count_{0};
+    uint64_t l1_cached_count_{0};
+    uint64_t l2_cached_count_{0};
+    uint64_t max_disordered_count_{0};
 
     void reorder_work() {
       SeqData data;
@@ -123,7 +124,7 @@ private:
       auto &slot = fast_buffer_[slot_idx];
 
       max_disordered_count_ =
-          std::max(max_disordered_count_.load(), data.seq - next_expected_seq_);
+          std::max(max_disordered_count_, data.seq - next_expected_seq_);
 
       if (!slot.valid) {
         slot.valid = true;
@@ -196,27 +197,26 @@ private:
     }
     bool get_next(SeqData &data) { return output_queue_.pop(data); }
     void print_debug_info() {
-      std::cout << "Processed count: " << processed_count_.load() << std::endl;
-      std::cout << "Direct hit count: " << direct_hit_count_.load()
-                << std::endl;
+      std::cout << "Processed count: " << processed_count_ << std::endl;
+      std::cout << "Direct hit count: " << direct_hit_count_ << std::endl;
       std::cout << "Direct hit rate: "
-                << (direct_hit_count_.load() * 100.0 / processed_count_.load())
-                << "%" << std::endl;
-      std::cout << "L1 cached count: " << l1_cached_count_.load() << std::endl;
+                << (direct_hit_count_ * 100.0 / processed_count_) << "%"
+                << std::endl;
+      std::cout << "L1 cached count: " << l1_cached_count_ << std::endl;
       std::cout << "L1 hit rate : "
-                << (l1_cached_count_.load() * 100.0 / processed_count_.load())
-                << "%" << std::endl;
-      std::cout << "L2 cached count: " << l2_cached_count_.load() << std::endl;
+                << (l1_cached_count_ * 100.0 / processed_count_) << "%"
+                << std::endl;
+      std::cout << "L2 cached count: " << l2_cached_count_ << std::endl;
       std::cout << "L2 hit rate : "
-                << (l2_cached_count_.load() * 100.0 / processed_count_.load())
-                << "%" << std::endl;
+                << (l2_cached_count_ * 100.0 / processed_count_) << "%"
+                << std::endl;
       if (processed_count_ !=
           direct_hit_count_ + l1_cached_count_ + l2_cached_count_) {
         std::cout << "Warning: processed_count_ != direct_hit_count_ + "
                      "l1_cached_count_ + l2_cached_count_"
                   << std::endl;
       }
-      std::cout << "Max disordered count: " << max_disordered_count_.load()
+      std::cout << "Max disordered count: " << max_disordered_count_
                 << std::endl;
     }
   };
